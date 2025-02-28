@@ -1,0 +1,162 @@
+name: Build and Deploy TEE
+
+on:
+    workflow_call:
+
+# Useful commands:
+#
+# List all images that support Intel TDX:
+#   gcloud alpha compute images list \
+#     --project=tdx-guest-images \
+#     --filter="guestOsFeatures[].type:(TDX_CAPABLE)"
+#
+# List GuestOS features for a specific image:
+#   gcloud compute images describe-from-family ubuntu-2204-lts --project ubuntu-os-cloud
+#
+# Requires the following additional Google Cloud APIs:
+#   - Compute Engine API
+#   - Confidential Computing API
+#   - Cloud Build API
+
+env:
+    GOOGLE_CLOUD_PROJECT: tee-3fed2f
+    GOOGLE_WORKLOAD_IDENTITY_PROVIDER: projects/1035454626678/locations/global/workloadIdentityPools/github/providers/pluto-tee-web-prover
+    BUCKET: tee-3fed2f-images-476683
+    BASE_VM_IMAGE_NAME: ubuntu-2204-lts
+    BASE_VM_IMAGE_PROJECT: ubuntu-os-cloud
+    CLOUDFLARE_DNS_ZONE_ID: 1d20e7dd6bf74aa550038d25bd4ac8b8
+    CLOUDFLARE_DOMAIN: pluto.dev
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: "read"
+            id-token: "write"
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Get git short hash
+              id: git-hash
+              run: echo "SHORT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+            - uses: "google-github-actions/auth@v2"
+              if: ${{ !env.ACT }}
+              with:
+                  project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
+                  workload_identity_provider: ${{ env.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
+
+            - uses: "google-github-actions/auth@v2"
+              if: ${{ env.ACT }}
+              with:
+                  project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
+                  credentials_json: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS_JSON }}
+
+            - name: "Set up Cloud SDK"
+              uses: "google-github-actions/setup-gcloud@v2"
+              with:
+                  version: ">= 506.0.0"
+
+            # docs: https://cloud.google.com/compute/docs/import/requirements-export-import-images
+            - name: Export existing VM image to a Google Cloud Storage Bucket
+              run: |
+                  gcloud compute images export \
+                    --destination-uri gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.qcow2 \
+                    --image-family ${{ env.BASE_VM_IMAGE_NAME }} \
+                    --image-project ${{ env.BASE_VM_IMAGE_PROJECT }} \
+                    --export-format qcow2 \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }}
+
+            - name: Download the exported image
+              run: |
+                  gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.qcow2 disk.qcow2
+
+            - name: Customize image
+              if: ${{ !env.ACT }} # TODO: virt-customize doesn't work inside Docker
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libguestfs-tools
+
+                  # TODO: Customize the image
+                  sudo virt-customize -a disk.qcow2 \
+                    --install nginx \
+                    --run-command "echo 'Hello world from Pluto' > /var/www/html/index.html" \
+                    --run-command "systemctl enable nginx"
+
+            - name: Convert disk image to raw format and compress it
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y qemu-utils
+                  qemu-img convert -O raw disk.qcow2 disk.raw
+                  tar -czvf disk.raw.tar.gz disk.raw
+
+            - name: Upload the customized image
+              run: |
+                  gsutil cp disk.raw.tar.gz gs://${{ env.BUCKET }}/pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw.tar.gz
+
+            - name: Delete any existing Google Cloud Image
+              run: |
+                  gcloud compute images delete pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }} \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
+                    --quiet || true
+
+            - name: Create a new Google Cloud Image from the customized image
+              run: |
+                  gcloud compute images create pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }} \
+                    --source-uri gs://${{ env.BUCKET }}/pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw.tar.gz \
+                    --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,SEV_CAPABLE,SEV_SNP_CAPABLE,SEV_LIVE_MIGRATABLE,SEV_LIVE_MIGRATABLE_V2,IDPF,TDX_CAPABLE,UEFI_COMPATIBLE,GVNIC \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }}
+
+            - name: Delete any existing TEE instance
+              run: |
+                  gcloud compute instances delete tee-instance-${{ steps.git-hash.outputs.SHORT_HASH }} \
+                    --zone us-central1-a \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
+                    --quiet || true
+
+            - name: Boot new TEE instance
+              id: instance
+              run: |
+                  INSTANCE=`gcloud compute instances create tee-instance-${{ steps.git-hash.outputs.SHORT_HASH }} \
+                    --machine-type c3-standard-4 \
+                    --zone us-central1-a \
+                    --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
+                    --metadata="git-hash=${{ github.sha }}" \
+                    --scopes=https://www.googleapis.com/auth/cloud-platform \
+                    --tags=tee \
+                    --confidential-compute-type=TDX \
+                    --shielded-secure-boot \
+                    --maintenance-policy=TERMINATE \
+                    --image pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }} \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
+                    --format=json`
+
+                  EXTERNAL_IP=$(echo $INSTANCE | jq -r '.[0].networkInterfaces[0].accessConfigs[0].natIP')
+                  echo "::notice ::TEE instance external IP: ${EXTERNAL_IP}"
+                  echo "EXTERNAL_IP=${EXTERNAL_IP}" >> $GITHUB_OUTPUT
+
+            - name: Create Cloudflare DNS record
+              run: |
+                  RESPONSE=`curl -s --request POST \
+                    --url https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records \
+                    --header 'Content-Type: application/json' \
+                    --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                    --data "{ \
+                      \"comment\": \"TEE ${{ steps.git-hash.outputs.SHORT_HASH }}\", \
+                      \"name\": \"${{ steps.git-hash.outputs.SHORT_HASH }}.tee\", \
+                      \"proxied\": false, \
+                      \"settings\": {}, \
+                      \"tags\": [], \
+                      \"ttl\": 3600, \
+                      \"content\": \"${{ steps.instance.outputs.EXTERNAL_IP }}\", \
+                      \"type\": \"A\" \
+                    }"`
+
+                  echo $RESPONSE
+                  if [ "$(echo $RESPONSE | jq -r .success)" != "true" ]; then
+                    echo "Error: Cloudflare API call failed."
+                    exit 1
+                  fi
+
+                  echo "::notice ::TEE URL:: ${{ steps.git-hash.outputs.SHORT_HASH }}.tee.${{ env.CLOUDFLARE_DOMAIN }}"
