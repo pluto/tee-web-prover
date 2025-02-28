@@ -79,7 +79,7 @@ jobs:
                   sudo apt-get install -y libguestfs-tools
 
                   # TODO: Customize the image
-                  sudo virt-customize -a disk.qcow2 \
+                  sudo virt-customize -v -x -a disk.qcow2 \
                     --install nginx \
                     --run-command "echo 'Hello world from Pluto' > /var/www/html/index.html" \
                     --run-command "systemctl enable nginx"
