@@ -228,6 +228,7 @@ jobs:
                   echo $INSTANCE
                   EXTERNAL_IP=$(echo $INSTANCE | jq -r '.[0].networkInterfaces[0].accessConfigs[0].natIP')
                   echo "::notice ::TEE instance external IP: ${EXTERNAL_IP}"
+                  echo "::notice ::TEE instance: tee-instance-${{ steps.git-hash.outputs.SHORT_HASH }}"
                   echo "EXTERNAL_IP=${EXTERNAL_IP}" >> $GITHUB_OUTPUT
 
             - name: Create Cloudflare DNS record
@@ -285,9 +286,9 @@ jobs:
                     exit 1
                   else
                     if [[ "$RECORD_COUNT" -gt 0 ]]; then
-                      echo "Updated existing record to point ${{ steps.instance.outputs.EXTERNAL_IP }} to ${FULL_DNS_NAME}"
+                      echo "Updated existing record to point ${FULL_DNS_NAME} to ${{ steps.instance.outputs.EXTERNAL_IP }}"
                     else
-                      echo "Created new record pointing ${{ steps.instance.outputs.EXTERNAL_IP }} to ${FULL_DNS_NAME}"
+                      echo "Created new record pointing ${FULL_DNS_NAME} to ${{ steps.instance.outputs.EXTERNAL_IP }}"
                     fi
                   fi
 
