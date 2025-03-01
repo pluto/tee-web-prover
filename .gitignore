@@ -1,2 +1,4 @@
 .secrets
 tee-3fed2f-*.json
+disk.raw
+disk.raw.backup

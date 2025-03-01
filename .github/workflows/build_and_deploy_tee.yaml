@@ -59,17 +59,18 @@ jobs:
                   version: ">= 506.0.0"
 
             # docs: https://cloud.google.com/compute/docs/import/requirements-export-import-images
-            - name: Export existing VM image to a Google Cloud Storage Bucket
-              run: |
-                  gcloud compute images export \
-                    --destination-uri gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw \
-                    --image-family ${{ env.BASE_VM_IMAGE_NAME }} \
-                    --image-project ${{ env.BASE_VM_IMAGE_PROJECT }} \
-                    --project ${{ env.GOOGLE_CLOUD_PROJECT }}
+            # - name: Export existing VM image to a Google Cloud Storage Bucket
+            #   run: |
+            #       gcloud compute images export \
+            #         --destination-uri gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw \
+            #         --image-family ${{ env.BASE_VM_IMAGE_NAME }} \
+            #         --image-project ${{ env.BASE_VM_IMAGE_PROJECT }} \
+            #         --project ${{ env.GOOGLE_CLOUD_PROJECT }}
 
             - name: Download the exported image
               run: |
-                  gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw disk.raw
+                  # gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw disk.raw
+                  # gsutil cp gs://${{ env.BUCKET }}/ubuntu-2204-lts-5e7066a.raw disk.raw
 
             - name: Customize image
               # if: ${{ !env.ACT }} # TODO: virt-customize doesn't work inside Docker
@@ -87,8 +88,27 @@ jobs:
             - name: Convert disk image to raw format and compress it
               run: |
                   sudo apt-get update
-                  sudo apt-get install -y util-linux parted udev # qemu-utils  libguestfs-tools
+                  sudo apt-get install -y --no-install-recommends libguestfs-tools
+                  # sudo apt-get install --no-install-recommends -y qemu-utils # util-linux parted kpartx fdisk udev # qemu-utils  libguestfs-tools
                   # qemu-img convert -O raw disk.qcow2 disk.raw
+
+                  mkdir mnt
+                  guestmount -a disk.raw -i --rw mnt
+
+                  # sudo modprobe nbd max_part=8
+                  # sudo qemu-nbd --connect=/dev/nbd0 disk.raw
+                  #
+                  echo "-------------------------------------------"
+                  echo "-------------------------------------------"
+                  echo "-------------------------------------------"
+                  LOOPDEV=$(sudo losetup --find --show disk.raw)
+                  echo $LOOPDEV
+                  sudo fdisk -l $LOOPDEV
+
+                  echo "-------------------------------------------"
+                  echo "-------------------------------------------"
+                  echo "-------------------------------------------"
+                  exit 1
 
                   # mkdir mnt
                   # sudo mount -o loop disk.raw mnt
@@ -96,18 +116,30 @@ jobs:
                   # sudo umount mnt
                   #
                   # sudo virt-copy-in -a disk.raw /README /
-                  ls -la
-                  LOOP_DEVICE=$(sudo losetup -f --show disk.raw)
-                  echo "Loop device: $LOOP_DEVICE"
-                  sudo fdisk -l $LOOP_DEVICE
-                  sudo partprobe $LOOP_DEVICE
-                  mkdir -p mnt
-                  sudo mount ${LOOP_DEVICE}p1 mnt
-                  sudo cp README.md mnt/
-                  sudo ls -la mnt
-                  sudo sync
-                  sudo umount mnt
-                  sudo losetup -d $LOOP_DEVICE
+                  # ls -la
+
+                  # LOOP_DEVICE=$(sudo losetup -f --show disk.raw)
+                  # echo "Loop device: $LOOP_DEVICE"
+                  # echo "----5"
+                  # sudo fdisk -l $LOOP_DEVICE
+                  # echo "----4"
+
+                  # sudo kpartx -av $LOOP_DEVICE
+
+                  # echo "----1"
+
+                  # #sudo partprobe $LOOP_DEVICE
+                  # # sleep 10
+                  # PARTITION_INFO=$(sudo fdisk -l $LOOP_DEVICE)
+                  # echo "$PARTITION_INFO"
+                  # echo "----2"
+                  # mkdir -p mnt
+                  # sudo mount ${LOOP_DEVICE}p1 mnt
+                  # sudo cp README.md mnt/
+                  # sudo ls -la mnt
+                  # sudo sync
+                  # sudo umount mnt
+                  # sudo losetup -d $LOOP_DEVICE
 
                   tar -czvf disk.raw.tar.gz disk.raw
 
