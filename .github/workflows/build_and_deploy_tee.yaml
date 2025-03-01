@@ -59,22 +59,22 @@ jobs:
                   version: ">= 506.0.0"
 
             # docs: https://cloud.google.com/compute/docs/import/requirements-export-import-images
-            # - name: Export existing VM image to a Google Cloud Storage Bucket
-            #   run: |
-            #       gcloud compute images export \
-            #         --destination-uri gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw \
-            #         --image-family ${{ env.BASE_VM_IMAGE_NAME }} \
-            #         --image-project ${{ env.BASE_VM_IMAGE_PROJECT }} \
-            #         --project ${{ env.GOOGLE_CLOUD_PROJECT }}
+            - name: Export existing VM image to a Google Cloud Storage Bucket
+              run: |
+                  gcloud compute images export \
+                    --destination-uri gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw \
+                    --image-family ${{ env.BASE_VM_IMAGE_NAME }} \
+                    --image-project ${{ env.BASE_VM_IMAGE_PROJECT }} \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }}
 
             - name: Download the exported image
               run: |
-                  # gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw disk.raw.tar.gz
-                  gsutil cp gs://${{ env.BUCKET }}/ubuntu-2204-lts-5e7066a.raw disk.raw.tar.gz
+                  gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw disk.raw.tar.gz
+                  # gsutil cp gs://${{ env.BUCKET }}/ubuntu-2204-lts-5e7066a.raw disk.raw.tar.gz
                   tar -xvf disk.raw.tar.gz
                   rm disk.raw.tar.gz
-                  if [ ! -f "disk.raw" ]; then
-                    echo "ERROR: disk.raw file does not exist!"
+                  if [ ! -f disk.raw ]; then
+                    echo "ERROR: disk.raw does not exist!"
                     exit 1
                   fi
 
@@ -82,14 +82,16 @@ jobs:
               run: |
                   sudo apt-get update
                   sudo apt-get install -y --no-install-recommends fdisk
-                  mkdir mnt
 
-                  # Find the partition offset in the raw disk image
+                  # Mount the image
                   OFFSET=$(sudo fdisk -l disk.raw | grep "Linux filesystem" | head -n 1 | awk '{print $2 * 512}')
-                  echo "Partition offset: $OFFSET"
-
+                  mkdir mnt
                   sudo mount -o loop,offset=$OFFSET disk.raw mnt
+
+                  # Add files to the image
                   sudo cp README.md mnt/
+
+                  sudo sync
                   sudo umount mnt
 
             - name: Upload the customized image
