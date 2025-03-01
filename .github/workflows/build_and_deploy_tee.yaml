@@ -272,7 +272,7 @@ jobs:
                         \"type\": \"A\",
                         \"name\": \"${DNS_NAME}\",
                         \"content\": \"${{ steps.instance.outputs.EXTERNAL_IP }}\",
-                        \"ttl\": 5,
+                        \"ttl\": 300,
                         \"proxied\": false,
                         \"comment\": \"Created by GitHub Actions workflow - ${{ github.run_id }} - ${{ github.workflow }}\"
                       }")
