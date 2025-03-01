@@ -21,7 +21,8 @@ on:
 env:
     GOOGLE_CLOUD_PROJECT: tee-3fed2f
     GOOGLE_WORKLOAD_IDENTITY_PROVIDER: projects/1035454626678/locations/global/workloadIdentityPools/github/providers/pluto-tee-web-prover
-    BUCKET: tee-3fed2f-images-476683
+    CLOUD_VM_BUCKET: tee-3fed2f-images-2c95ac # write only
+    PLUTO_VM_BUCKET: tee-3fed2f-images-a3db73
     BASE_VM_IMAGE_NAME: ubuntu-2204-lts
     BASE_VM_IMAGE_PROJECT: ubuntu-os-cloud
     CLOUDFLARE_DNS_ZONE_ID: 1d20e7dd6bf74aa550038d25bd4ac8b8
@@ -58,19 +59,62 @@ jobs:
               with:
                   version: ">= 506.0.0"
 
-            # docs: https://cloud.google.com/compute/docs/import/requirements-export-import-images
+            - name: Get latest VM image
+              id: vm-image
+              run: |
+                  # Get both image name and features in a single command
+                  IMAGE_INFO=$(gcloud compute images describe-from-family ${{ env.BASE_VM_IMAGE_NAME }} \
+                    --project ${{ env.BASE_VM_IMAGE_PROJECT }} \
+                    --format="json")
+
+                  # Extract and set outputs using jq
+                  NAME=$(echo "$IMAGE_INFO" | jq -r '.name')
+                  FEATURES=$(echo "$IMAGE_INFO" | jq -r '.guestOsFeatures[].type' | tr '\n' ',')
+
+                  echo "NAME=${NAME}" >> $GITHUB_OUTPUT
+                  echo "FEATURES=${FEATURES}" >> $GITHUB_OUTPUT
+
+                  # Check if the VM image supports Intel TDX
+                  if [[ ! "$FEATURES" == *"TDX_CAPABLE"* ]]; then
+                    echo "ERROR: The VM image ${{ env.BASE_VM_IMAGE_NAME }} does not have feature TDX_CAPABLE enabled."
+                    echo "Features: $FEATURES"
+                  fi
+
+            - name: Ensure bucket retention policy is locked
+              run: |
+                  BUCKET=$(gcloud storage buckets describe gs://${{ env.CLOUD_VM_BUCKET }} --format="json")
+
+                  # Check if object retention policy is enabled and locked
+                  if [[ $(echo $BUCKET | jq -r '.retention_policy.isLocked') != "true" ]]; then
+                    echo "ERROR: Bucket retention policy is not locked for ${{ env.CLOUD_VM_BUCKET }}."
+                    exit 1
+                  fi
+
+                  # Also check the retention period to ensure it's suitable (e.g. minimum 30 days)
+                  RETENTION_PERIOD=$(echo $BUCKET | jq -r '.retention_policy.retentionPeriod')
+                  if [[ "$RETENTION_PERIOD" -lt 2592000 ]]; then
+                    echo "ERROR: Bucket retention policy is less than 30 days ${{ env.CLOUD_VM_BUCKET }}."
+                    exit 1
+                  fi
+
             - name: Export existing VM image to a Google Cloud Storage Bucket
               run: |
+                  # Check if we already have this image exported
+                  if gsutil -q stat gs://${{ env.CLOUD_VM_BUCKET }}/${{ steps.vm-image.outputs.NAME }}.raw; then
+                    exit 0
+                  fi
+
+                  # docs: https://cloud.google.com/compute/docs/import/requirements-export-import-images
                   gcloud compute images export \
-                    --destination-uri gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw \
+                    --destination-uri gs://${{ env.CLOUD_VM_BUCKET }}/${{ steps.vm-image.outputs.NAME }}.raw \
                     --image-family ${{ env.BASE_VM_IMAGE_NAME }} \
                     --image-project ${{ env.BASE_VM_IMAGE_PROJECT }} \
                     --project ${{ env.GOOGLE_CLOUD_PROJECT }}
 
-            - name: Download the exported image
+            - name: Download the original VM image
               run: |
-                  gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw disk.raw.tar.gz
-                  # gsutil cp gs://${{ env.BUCKET }}/ubuntu-2204-lts-5e7066a.raw disk.raw.tar.gz
+                  gsutil cp gs://${{ env.CLOUD_VM_BUCKET }}/${{ steps.vm-image.outputs.NAME }}.raw disk.raw.tar.gz
+                  echo "Decompressing disk.raw..."
                   tar -xvf disk.raw.tar.gz
                   rm disk.raw.tar.gz
                   if [ ! -f disk.raw ]; then
@@ -78,7 +122,7 @@ jobs:
                     exit 1
                   fi
 
-            - name: Add files to the image
+            - name: Add files to the VM image
               run: |
                   sudo apt-get update
                   sudo apt-get install -y --no-install-recommends fdisk
@@ -89,15 +133,17 @@ jobs:
                   sudo mount -o loop,offset=$OFFSET disk.raw mnt
 
                   # Add files to the image
+                  # TODO
                   sudo cp README.md mnt/
 
                   sudo sync
                   sudo umount mnt
 
-            - name: Upload the customized image
+            - name: Upload the customized VM image to the Google Cloud Storage Bucket
               run: |
+                  echo "Compressing disk.raw..."
                   tar -czvf disk.raw.tar.gz disk.raw
-                  gsutil cp disk.raw.tar.gz gs://${{ env.BUCKET }}/pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw.tar.gz
+                  gsutil cp disk.raw.tar.gz gs://${{ env.PLUTO_VM_BUCKET }}/pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw.tar.gz
 
             - name: Delete any existing Google Cloud Image
               run: |
@@ -105,11 +151,11 @@ jobs:
                     --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
                     --quiet || true
 
-            - name: Create a new Google Cloud Image from the customized image
+            - name: Create a new Google Cloud Image from the customized VM image
               run: |
                   gcloud compute images create pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }} \
-                    --source-uri gs://${{ env.BUCKET }}/pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw.tar.gz \
-                    --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,SEV_CAPABLE,SEV_SNP_CAPABLE,SEV_LIVE_MIGRATABLE,SEV_LIVE_MIGRATABLE_V2,IDPF,TDX_CAPABLE,UEFI_COMPATIBLE,GVNIC \
+                    --source-uri gs://${{ env.PLUTO_VM_BUCKET }}/pluto-${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw.tar.gz \
+                    --guest-os-features="${{ steps.vm-image.outputs.FEATURES }}" \
                     --project ${{ env.GOOGLE_CLOUD_PROJECT }}
 
             - name: Delete any existing TEE instance
@@ -119,7 +165,7 @@ jobs:
                     --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
                     --quiet || true
 
-            - name: Boot new TEE instance
+            - name: Create new TEE instance
               id: instance
               run: |
                   INSTANCE=`gcloud compute instances create tee-instance-${{ steps.git-hash.outputs.SHORT_HASH }} \
@@ -136,6 +182,7 @@ jobs:
                     --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
                     --format=json`
 
+                  echo $INSTANCE
                   EXTERNAL_IP=$(echo $INSTANCE | jq -r '.[0].networkInterfaces[0].accessConfigs[0].natIP')
                   echo "::notice ::TEE instance external IP: ${EXTERNAL_IP}"
                   echo "EXTERNAL_IP=${EXTERNAL_IP}" >> $GITHUB_OUTPUT
