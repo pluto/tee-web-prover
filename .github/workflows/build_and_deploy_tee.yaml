@@ -21,7 +21,7 @@ on:
 env:
     GOOGLE_CLOUD_PROJECT: tee-3fed2f
     GOOGLE_WORKLOAD_IDENTITY_PROVIDER: projects/1035454626678/locations/global/workloadIdentityPools/github/providers/pluto-tee-web-prover
-    CLOUD_VM_BUCKET: tee-3fed2f-images-2c95ac # write only
+    CLOUD_VM_BUCKET: tee-3fed2f-images-77bd26
     PLUTO_VM_BUCKET: tee-3fed2f-images-a3db73
     BASE_VM_IMAGE_NAME: ubuntu-2204-lts
     BASE_VM_IMAGE_PROJECT: ubuntu-os-cloud
@@ -41,6 +41,47 @@ jobs:
             - name: Get git short hash
               id: git-hash
               run: echo "SHORT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+            - name: Set URL prefix based on branch
+              id: ref
+              run: |
+                  BRANCH_NAME="${{ github.ref_name }}"
+
+                  # Check if branch is a feature branch
+                  if [[ "$BRANCH_NAME" == feat/* ]]; then
+                    # Remove 'feat/' prefix
+                    BRANCH_NAME_CLEAN=$(echo $BRANCH_NAME | sed 's|^feat/||')
+
+                    # Replace any character not allowed in a subdomain with dashes
+                    # Allowed: letters, numbers, and hyphens (no dots, underscores, etc.)
+                    PREFIX=$(echo $BRANCH_NAME_CLEAN | sed -E 's|[^a-zA-Z0-9-]|-|g')
+
+                    # Ensure no leading hyphens
+                    PREFIX=$(echo $PREFIX | sed -E 's|^-+||g')
+
+                    # Ensure no trailing hyphens
+                    PREFIX=$(echo $PREFIX | sed -E 's|-+$||g')
+
+                    # Replace multiple consecutive hyphens with a single one
+                    PREFIX=$(echo $PREFIX | sed -E 's|-+|-|g')
+
+                    # Limit length to avoid exceeding DNS limits (63 chars max for a subdomain)
+                    if [ ${#PREFIX} -gt 59 ]; then
+                      # 59 to leave room for potential truncation marker
+                      PREFIX="${PREFIX:0:55}-trunc"
+                    fi
+
+                    # Make sure it's not empty, use fallback if needed
+                    if [ -z "$PREFIX" ]; then
+                      PREFIX="feature-${{ steps.git-hash.outputs.SHORT_HASH }}"
+                    fi
+
+                    echo "NAME=${PREFIX}" >> $GITHUB_OUTPUT
+
+                  else
+                    # Default to using the git short hash
+                    echo "NAME=${{ steps.git-hash.outputs.SHORT_HASH }}" >> $GITHUB_OUTPUT
+                  fi
 
             - uses: "google-github-actions/auth@v2"
               if: ${{ !env.ACT }}
@@ -80,22 +121,24 @@ jobs:
                     echo "Features: $FEATURES"
                   fi
 
-            - name: Ensure bucket retention policy is locked
-              run: |
-                  BUCKET=$(gcloud storage buckets describe gs://${{ env.CLOUD_VM_BUCKET }} --format="json")
+            # TODO: `gcloud compute images export` creates and deletes temporary files in the bucket
+            #        which makes it impossible to enforce bucket retention policy.
+            # - name: Ensure bucket retention policy is locked
+            #   run: |
+            #       BUCKET=$(gcloud storage buckets describe gs://${{ env.CLOUD_VM_BUCKET }} --format="json")
 
-                  # Check if object retention policy is enabled and locked
-                  if [[ $(echo $BUCKET | jq -r '.retention_policy.isLocked') != "true" ]]; then
-                    echo "ERROR: Bucket retention policy is not locked for ${{ env.CLOUD_VM_BUCKET }}."
-                    exit 1
-                  fi
+            #       # Check if object retention policy is enabled and locked
+            #       if [[ $(echo $BUCKET | jq -r '.retention_policy.isLocked') != "true" ]]; then
+            #         echo "ERROR: Bucket retention policy is not locked for ${{ env.CLOUD_VM_BUCKET }}."
+            #         exit 1
+            #       fi
 
-                  # Also check the retention period to ensure it's suitable (e.g. minimum 30 days)
-                  RETENTION_PERIOD=$(echo $BUCKET | jq -r '.retention_policy.retentionPeriod')
-                  if [[ "$RETENTION_PERIOD" -lt 2592000 ]]; then
-                    echo "ERROR: Bucket retention policy is less than 30 days ${{ env.CLOUD_VM_BUCKET }}."
-                    exit 1
-                  fi
+            #       # Also check the retention period to ensure it's suitable (e.g. minimum 30 days)
+            #       RETENTION_PERIOD=$(echo $BUCKET | jq -r '.retention_policy.retentionPeriod')
+            #       if [[ "$RETENTION_PERIOD" -lt 2592000 ]]; then
+            #         echo "ERROR: Bucket retention policy is less than 30 days ${{ env.CLOUD_VM_BUCKET }}."
+            #         exit 1
+            #       fi
 
             - name: Export existing VM image to a Google Cloud Storage Bucket
               run: |
@@ -189,29 +232,63 @@ jobs:
 
             - name: Create Cloudflare DNS record
               run: |
-                  RESPONSE=`curl -s --request POST \
-                    --url https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records \
-                    --header 'Content-Type: application/json' \
-                    --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
-                    --data "{ \
-                      \"comment\": \"TEE ${{ steps.git-hash.outputs.SHORT_HASH }}\", \
-                      \"name\": \"${{ steps.git-hash.outputs.SHORT_HASH }}.tee\", \
-                      \"proxied\": false, \
-                      \"settings\": {}, \
-                      \"tags\": [], \
-                      \"ttl\": 3600, \
-                      \"content\": \"${{ steps.instance.outputs.EXTERNAL_IP }}\", \
-                      \"type\": \"A\" \
-                    }"`
+                  DNS_NAME="${{ steps.ref.outputs.NAME }}.tee"
+                  FULL_DNS_NAME="${DNS_NAME}.${{ env.CLOUDFLARE_DOMAIN }}"
 
-                  echo $RESPONSE
+                  # First, check if record already exists by listing records with a filter
+                  EXISTING_RECORDS=$(curl -s --request GET \
+                    --url "https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records?type=A&name=${FULL_DNS_NAME}" \
+                    --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}")
 
-                  # If record already exists, don't treat it as an error
-                  if [ "$(echo $RESPONSE | jq -r .success)" == "false" ] && [ "$(echo $RESPONSE | jq -r '.errors[0].code')" == "81058" ]; then
-                    echo "DNS record already exists. Continuing."
-                  elif [ "$(echo $RESPONSE | jq -r .success)" != "true" ]; then
-                    echo "Error: Cloudflare API call failed."
+                  # Check if the request was successful
+                  if [ "$(echo $EXISTING_RECORDS | jq -r '.success')" != "true" ]; then
+                    echo $EXISTING_RECORDS
+                    echo "ERROR: Failed to check existing DNS records."
                     exit 1
                   fi
 
-                  echo "::notice ::TEE URL:: ${{ steps.git-hash.outputs.SHORT_HASH }}.tee.${{ env.CLOUDFLARE_DOMAIN }}"
+                  RECORD_COUNT=$(echo $EXISTING_RECORDS | jq -r '.result | length')
+
+                  if [[ "$RECORD_COUNT" -gt 0 ]]; then
+                    # Record exists, get its ID and update it
+                    RECORD_ID=$(echo $EXISTING_RECORDS | jq -r '.result[0].id')
+                    echo "Updating existing DNS record ID ${RECORD_ID}"
+
+                    RESPONSE=$(curl -s --request PATCH \
+                      --url "https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records/${RECORD_ID}" \
+                      --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                      --header 'Content-Type: application/json' \
+                      --data "{
+                        \"content\": \"${{ steps.instance.outputs.EXTERNAL_IP }}\",
+                        \"comment\": \"Updated by GitHub Actions workflow - ${{ github.run_id }} - ${{ github.workflow }}\"
+                      }")
+                  else
+                    # Create new record
+                    RESPONSE=$(curl -s --request POST \
+                      --url "https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records" \
+                      --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                      --header 'Content-Type: application/json' \
+                      --data "{
+                        \"type\": \"A\",
+                        \"name\": \"${DNS_NAME}\",
+                        \"content\": \"${{ steps.instance.outputs.EXTERNAL_IP }}\",
+                        \"ttl\": 5,
+                        \"proxied\": false,
+                        \"comment\": \"Created by GitHub Actions workflow - ${{ github.run_id }} - ${{ github.workflow }}\"
+                      }")
+                  fi
+
+                  # Check for errors in the response
+                  if [ "$(echo $RESPONSE | jq -r '.success')" != "true" ]; then
+                    echo "Error: Cloudflare API call failed:"
+                    echo $RESPONSE | jq .
+                    exit 1
+                  else
+                    if [[ "$RECORD_COUNT" -gt 0 ]]; then
+                      echo "Updated existing record to point ${{ steps.instance.outputs.EXTERNAL_IP }} to ${FULL_DNS_NAME}"
+                    else
+                      echo "Created new record pointing ${{ steps.instance.outputs.EXTERNAL_IP }} to ${FULL_DNS_NAME}"
+                    fi
+                  fi
+
+                  echo "::notice ::TEE URL:: ${FULL_DNS_NAME}"
