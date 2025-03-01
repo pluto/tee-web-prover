@@ -70,7 +70,7 @@ jobs:
             - name: Download the exported image
               run: |
                   # gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw disk.raw
-                  # gsutil cp gs://${{ env.BUCKET }}/ubuntu-2204-lts-5e7066a.raw disk.raw
+                  gsutil cp gs://${{ env.BUCKET }}/ubuntu-2204-lts-5e7066a.raw disk.raw
 
             - name: Customize image
               # if: ${{ !env.ACT }} # TODO: virt-customize doesn't work inside Docker
