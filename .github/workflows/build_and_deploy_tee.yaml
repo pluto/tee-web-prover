@@ -42,16 +42,9 @@ jobs:
               run: echo "SHORT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
             - uses: "google-github-actions/auth@v2"
-              if: ${{ !env.ACT }}
               with:
                   project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
                   workload_identity_provider: ${{ env.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
-
-            - uses: "google-github-actions/auth@v2"
-              if: ${{ env.ACT }}
-              with:
-                  project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
-                  credentials_json: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS_JSON }}
 
             - name: "Set up Cloud SDK"
               uses: "google-github-actions/setup-gcloud@v2"
@@ -72,89 +65,98 @@ jobs:
                   # gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.raw disk.raw
                   gsutil cp gs://${{ env.BUCKET }}/ubuntu-2204-lts-5e7066a.raw disk.raw
 
-            - name: Customize image
-              # if: ${{ !env.ACT }} # TODO: virt-customize doesn't work inside Docker
-              run: |
-                  # sudo apt-get update
-                  # sudo apt-get install -y libguestfs-tools
+            # - name: Add files to the image
+            #   run: |
 
-                  # TODO: Customize the image
-                  # sudo virt-customize -v -x -a disk.qcow2 \
-                    # --install nginx \
-                    # --run-command "echo 'Hello world from Pluto' > /var/www/html/index.html" \
-                    # --run-command "systemctl enable nginx"
-                    # --run-command "systemctl start nginx"
+            # - name: Customize image
+            #   # if: ${{ !env.ACT }} # TODO: virt-customize doesn't work inside Docker
+            #   run: |
+            #       # sudo apt-get update
+            #       # sudo apt-get install -y libguestfs-tools
 
-            - name: Convert disk image to raw format and compress it
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y --no-install-recommends parted
-                  LOOP_DEVICE=$(sudo losetup -f --show disk.raw)
-                  echo "Loop device: $LOOP_DEVICE"
-                                    sudo partprobe $LOOP_DEVICE
-                                    mkdir -p mnt
-                                    sudo mount ${LOOP_DEVICE}p1 mnt
-                                    sudo cp README.md mnt/
-                                    sudo ls -la mnt
-                                    sudo sync
-                                    sudo umount mnt
-                                    sudo losetup -d $LOOP_DEVICE
+            #       # TODO: Customize the image
+            #       # sudo virt-customize -v -x -a disk.qcow2 \
+            #         # --install nginx \
+            #         # --run-command "echo 'Hello world from Pluto' > /var/www/html/index.html" \
+            #         # --run-command "systemctl enable nginx"
+            #         # --run-command "systemctl start nginx"
 
-                  # sudo apt-get update
-                  # sudo apt-get install -y --no-install-recommends libguestfs-tools
-                  # sudo apt-get install --no-install-recommends -y qemu-utils # util-linux parted kpartx fdisk udev # qemu-utils  libguestfs-tools
-                  # qemu-img convert -O raw disk.qcow2 disk.raw
+            # - name: Convert disk image to raw format and compress it
+            #   run: |
+            #       sudo apt-get update
+            #       sudo apt-get install -y --no-install-recommends parted udev
+            #       cp disk.raw disk2.raw
+            #       chmod 644 disk2.raw
+            #       ls
+            #       LOOP_DEVICE=$(sudo losetup -f --show disk2.raw)
+            #       echo "Loop device: $LOOP_DEVICE"
+            #                         sudo partprobe $LOOP_DEVICE
+            #                         sleep 5
+            #                         ls -la ${LOOP_DEVICE}*
+            #                         mkdir -p mnt
+            #                         sudo mount ${LOOP_DEVICE}p1 mnt
+            #                         sudo cp README.md mnt/
+            #                         sudo ls -la mnt
+            #                         sudo sync
+            #                         sudo umount mnt
+            #                         sudo losetup -d $LOOP_DEVICE
 
-                  #mkdir mnt
-                  #guestmount -a disk.raw -i --rw mnt
+            #       # sudo apt-get update
+            #       # sudo apt-get install -y --no-install-recommends libguestfs-tools
+            #       # sudo apt-get install --no-install-recommends -y qemu-utils # util-linux parted kpartx fdisk udev # qemu-utils  libguestfs-tools
+            #       # qemu-img convert -O raw disk.qcow2 disk.raw
 
-                  # sudo modprobe nbd max_part=8
-                  # sudo qemu-nbd --connect=/dev/nbd0 disk.raw
-                  #
-                  # echo "-------------------------------------------"
-                  # echo "-------------------------------------------"
-                  # echo "-------------------------------------------"
-                  # LOOPDEV=$(sudo losetup --find --show disk.raw)
-                  # echo $LOOPDEV
-                  # sudo fdisk -l $LOOPDEV
+            #       #mkdir mnt
+            #       #guestmount -a disk.raw -i --rw mnt
 
-                  # echo "-------------------------------------------"
-                  # echo "-------------------------------------------"
-                  # echo "-------------------------------------------"
-                  # exit 1
+            #       # sudo modprobe nbd max_part=8
+            #       # sudo qemu-nbd --connect=/dev/nbd0 disk.raw
+            #       #
+            #       # echo "-------------------------------------------"
+            #       # echo "-------------------------------------------"
+            #       # echo "-------------------------------------------"
+            #       # LOOPDEV=$(sudo losetup --find --show disk.raw)
+            #       # echo $LOOPDEV
+            #       # sudo fdisk -l $LOOPDEV
 
-                  # mkdir mnt
-                  # sudo mount -o loop disk.raw mnt
-                  # cp README /mnt/README
-                  # sudo umount mnt
-                  #
-                  # sudo virt-copy-in -a disk.raw /README /
-                  # ls -la
+            #       # echo "-------------------------------------------"
+            #       # echo "-------------------------------------------"
+            #       # echo "-------------------------------------------"
+            #       # exit 1
 
-                  # LOOP_DEVICE=$(sudo losetup -f --show disk.raw)
-                  # echo "Loop device: $LOOP_DEVICE"
-                  # echo "----5"
-                  # sudo fdisk -l $LOOP_DEVICE
-                  # echo "----4"
+            #       # mkdir mnt
+            #       # sudo mount -o loop disk.raw mnt
+            #       # cp README /mnt/README
+            #       # sudo umount mnt
+            #       #
+            #       # sudo virt-copy-in -a disk.raw /README /
+            #       # ls -la
 
-                  # sudo kpartx -av $LOOP_DEVICE
+            #       # LOOP_DEVICE=$(sudo losetup -f --show disk.raw)
+            #       # echo "Loop device: $LOOP_DEVICE"
+            #       # echo "----5"
+            #       # sudo fdisk -l $LOOP_DEVICE
+            #       # echo "----4"
 
-                  # echo "----1"
+            #       # sudo kpartx -av $LOOP_DEVICE
 
-                  # #sudo partprobe $LOOP_DEVICE
-                  # # sleep 10
-                  # PARTITION_INFO=$(sudo fdisk -l $LOOP_DEVICE)
-                  # echo "$PARTITION_INFO"
-                  # echo "----2"
-                  # mkdir -p mnt
-                  # sudo mount ${LOOP_DEVICE}p1 mnt
-                  # sudo cp README.md mnt/
-                  # sudo ls -la mnt
-                  # sudo sync
-                  # sudo umount mnt
-                  # sudo losetup -d $LOOP_DEVICE
+            #       # echo "----1"
 
-                  tar -czvf disk.raw.tar.gz disk.raw
+            #       # #sudo partprobe $LOOP_DEVICE
+            #       # # sleep 10
+            #       # PARTITION_INFO=$(sudo fdisk -l $LOOP_DEVICE)
+            #       # echo "$PARTITION_INFO"
+            #       # echo "----2"
+            #       # mkdir -p mnt
+            #       # sudo mount ${LOOP_DEVICE}p1 mnt
+            #       # sudo cp README.md mnt/
+            #       # sudo ls -la mnt
+            #       # sudo sync
+            #       # sudo umount mnt
+            #       # sudo losetup -d $LOOP_DEVICE
+
+            - name: Compress the customized image
+              run: tar -czvf disk.raw.tar.gz disk.raw
 
             - name: Upload the customized image
               run: |
