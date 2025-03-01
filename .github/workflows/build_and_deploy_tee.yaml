@@ -73,23 +73,41 @@ jobs:
                   gsutil cp gs://${{ env.BUCKET }}/${{ env.BASE_VM_IMAGE_NAME }}-${{ steps.git-hash.outputs.SHORT_HASH }}.qcow2 disk.qcow2
 
             - name: Customize image
-              if: ${{ !env.ACT }} # TODO: virt-customize doesn't work inside Docker
+              # if: ${{ !env.ACT }} # TODO: virt-customize doesn't work inside Docker
               run: |
-                  sudo apt-get update
-                  sudo apt-get install -y libguestfs-tools
+                  # sudo apt-get update
+                  # sudo apt-get install -y libguestfs-tools
 
                   # TODO: Customize the image
-                  sudo virt-customize -v -x -a disk.qcow2 \
-                    --install nginx \
-                    --run-command "echo 'Hello world from Pluto' > /var/www/html/index.html" \
-                    --run-command "systemctl enable nginx"
+                  # sudo virt-customize -v -x -a disk.qcow2 \
+                    # --install nginx \
+                    # --run-command "echo 'Hello world from Pluto' > /var/www/html/index.html" \
+                    # --run-command "systemctl enable nginx"
+                    # --run-command "systemctl start nginx"
 
             - name: Convert disk image to raw format and compress it
               run: |
                   sudo apt-get update
-                  sudo apt-get install -y qemu-utils
+                  sudo apt-get install -y qemu-utils util-linux parted # libguestfs-tools
                   qemu-img convert -O raw disk.qcow2 disk.raw
-                  tar -czvf disk.raw.tar.gz disk.raw
+                  # tar -czvf disk.raw.tar.gz disk.raw
+
+                  # mkdir mnt
+                  # sudo mount -o loop disk.raw mnt
+                  # cp README /mnt/README
+                  # sudo umount mnt
+                  #
+                  # sudo virt-copy-in -a disk.raw /README /
+
+                  LOOP_DEVICE=$(sudo losetup -f --show disk.raw)
+                  echo "Loop device: $LOOP_DEVICE"
+                  sudo partprobe $LOOP_DEVICE
+                  mkdir -p mnt
+                  sudo mount ${LOOP_DEVICE}p1 mnt
+                  cp README mnt/README
+                  sudo sync
+                  sudo umount mnt
+                  sudo losetup -d $LOOP_DEVICE
 
             - name: Upload the customized image
               run: |
