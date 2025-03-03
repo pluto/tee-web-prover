@@ -6,7 +6,7 @@ After=network.target
 User=tee
 Group=tee
 WorkingDirectory=/opt/tee/tee-web-prover
-ExecStart=target/release/tee-web-prover
+ExecStart=/opt/tee/tee-web-prover/target/release/tee-web-prover
 Restart=always
 Environment="RUST_LOG=info"
 

@@ -20,6 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // We create a TcpListener and bind it to 0.0.0.0:80
     let listener = TcpListener::bind(addr).await?;
 
+    println!("Listening on {}", addr);
+
     // We start a loop to continuously accept incoming connections
     loop {
         let (stream, _) = listener.accept().await?;
