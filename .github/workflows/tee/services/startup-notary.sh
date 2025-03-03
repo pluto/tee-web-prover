@@ -1,6 +1,5 @@
 #!/bin/bash
 set -ex
-
-. "$HOME/.cargo/env"
+source /root/.cargo/env
 
 cargo build --release

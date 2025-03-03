@@ -6,18 +6,19 @@ export GIT_HASH=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/at
 export GIT_BRANCH=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attributes/git-branch" -H "Metadata-Flavor: Google")
 export DOMAIN=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attributes/domain" -H "Metadata-Flavor: Google")
 
+# Install global dependencies
 echo "Installing Rust"
 curl https://sh.rustup.rs -sSf | sh -s -- -y
-. "$HOME/.cargo/env"
 
-mkdir /opt/tee
-
+# Create tee user
 if ! id -u tee &>/dev/null; then
   useradd --system --shell /usr/sbin/nologin tee
 else
   log "User 'tee' already exists"
 fi
 
+# Clone repo
+mkdir /opt/tee
 git clone --depth 1 --branch feat/github-tee-deploy-2 https://github.com/pluto/tee-web-prover.git /opt/tee/tee-web-prover
 cd /opt/tee/tee-web-prover
 
