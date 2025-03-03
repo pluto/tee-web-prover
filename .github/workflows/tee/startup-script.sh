@@ -8,6 +8,7 @@ export DOMAIN=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attr
 
 echo "Installing Rust"
 curl https://sh.rustup.rs -sSf | sh -s -- -y
+. "$HOME/.cargo/env"
 
 mkdir /opt/tee
 
@@ -23,7 +24,7 @@ cd /opt/tee/tee-web-prover
 # Run startup scripts
 for startupscript in $(find .github/workflows/tee/services -name "startup-*.sh"); do
   echo "Processing $startupscript"
-  $startupscript
+  sh $startupscript
 done
 
 chown -R tee:tee /opt/tee
