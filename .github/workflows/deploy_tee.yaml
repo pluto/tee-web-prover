@@ -109,6 +109,19 @@ jobs:
                     --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
                     --quiet || true
 
+                  # Also delete any instances with the same ref tag
+                  gcloud compute instances list \
+                    --filter="tags.items=${{ steps.ref.outputs.NAME }}" \
+                    --format="value(name,zone)" \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }} | \
+                  while read instance zone; do
+                    echo "Deleting instance $instance in zone $zone"
+                    gcloud compute instances delete "$instance" \
+                      --zone "$zone" \
+                      --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
+                      --quiet || true
+                  done
+
             - name: Create new TEE instance
               id: instance
               run: |
@@ -122,7 +135,7 @@ jobs:
                     --metadata="git-branch=${{ github.ref_name }},git-hash=${{ github.sha }},domain=${FULL_DNS_NAME}" \
                     --metadata-from-file startup-script=.github/workflows/tee/startup-script.sh \
                     --scopes=https://www.googleapis.com/auth/cloud-platform \
-                    --tags=tee \
+                    --tags=tee,${{ steps.ref.outputs.NAME }} \
                     --confidential-compute-type=TDX \
                     --shielded-secure-boot \
                     --maintenance-policy=TERMINATE \
