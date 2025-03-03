@@ -20,10 +20,7 @@ async fn health(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes
         Err(_) => "unknown".to_string(),
     };
 
-    let response_body = format!(
-        "healthy\nGIT_HASH: {}\nGIT_BRANCH: {}",
-        git_hash, git_branch
-    );
+    let response_body = format!("GIT_HASH: {}\nGIT_BRANCH: {}\n", git_hash, git_branch);
 
     return Ok(Response::new(Full::new(Bytes::from(response_body))));
 }
