@@ -10,7 +10,22 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 async fn health(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
-    Ok(Response::new(Full::new(Bytes::from("healthy"))))
+    let git_hash = match std::fs::read_to_string("/etc/tee/git_hash") {
+        Ok(hash) => hash.trim().to_string(),
+        Err(_) => "unknown".to_string(),
+    };
+
+    let git_branch = match std::fs::read_to_string("/etc/tee/git_branch") {
+        Ok(branch) => branch.trim().to_string(),
+        Err(_) => "unknown".to_string(),
+    };
+
+    let response_body = format!(
+        "healthy\nGIT_HASH: {}\nGIT_BRANCH: {}",
+        git_hash, git_branch
+    );
+
+    return Ok(Response::new(Full::new(Bytes::from(response_body))));
 }
 
 #[tokio::main]
