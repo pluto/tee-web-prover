@@ -1,0 +1,214 @@
+name: Deploy TEE
+
+on:
+    push:
+        branches: ["main", "feat/**"]
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+# Useful commands:
+#
+# List all images that support Intel TDX:
+#   gcloud alpha compute images list \
+#     --project=tdx-guest-images \
+#     --filter="guestOsFeatures[].type:(TDX_CAPABLE)"
+#
+# List GuestOS features for a specific image:
+#   gcloud compute images describe-from-family ubuntu-2204-lts --project ubuntu-os-cloud
+#
+# Requires the following additional Google Cloud APIs:
+#   - Compute Engine API
+#   - Confidential Computing API
+
+env:
+    GOOGLE_CLOUD_PROJECT: tee-3fed2f
+    GOOGLE_WORKLOAD_IDENTITY_PROVIDER: projects/1035454626678/locations/global/workloadIdentityPools/github/providers/pluto-tee-web-prover
+    VM_IMAGE_NAME: ubuntu-2204-lts
+    VM_IMAGE_PROJECT: ubuntu-os-cloud
+    CLOUDFLARE_DNS_ZONE_ID: 1d20e7dd6bf74aa550038d25bd4ac8b8
+    CLOUDFLARE_DOMAIN: pluto.dev
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: "read"
+            id-token: "write"
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Get git short hash
+              id: git-hash
+              run: echo "SHORT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+            - name: Set URL prefix based on branch
+              id: ref
+              run: |
+                  BRANCH_NAME="${{ github.ref_name }}"
+
+                  # Check if branch is a feature branch
+                  if [[ "$BRANCH_NAME" == feat/* ]]; then
+                    # Remove 'feat/' prefix
+                    BRANCH_NAME_CLEAN=$(echo $BRANCH_NAME | sed 's|^feat/||')
+
+                    # Replace any character not allowed in a subdomain with dashes
+                    # Allowed: letters, numbers, and hyphens (no dots, underscores, etc.)
+                    PREFIX=$(echo $BRANCH_NAME_CLEAN | sed -E 's|[^a-zA-Z0-9-]|-|g')
+
+                    # Ensure no leading hyphens
+                    PREFIX=$(echo $PREFIX | sed -E 's|^-+||g')
+
+                    # Ensure no trailing hyphens
+                    PREFIX=$(echo $PREFIX | sed -E 's|-+$||g')
+
+                    # Replace multiple consecutive hyphens with a single one
+                    PREFIX=$(echo $PREFIX | sed -E 's|-+|-|g')
+
+                    # Limit length to avoid exceeding DNS limits (63 chars max for a subdomain)
+                    if [ ${#PREFIX} -gt 59 ]; then
+                      # 59 to leave room for potential truncation marker
+                      PREFIX="${PREFIX:0:55}-trunc"
+                    fi
+
+                    # Make sure it's not empty, use fallback if needed
+                    if [ -z "$PREFIX" ]; then
+                      PREFIX="feature-${{ steps.git-hash.outputs.SHORT_HASH }}"
+                    fi
+
+                    echo "NAME=${PREFIX}" >> $GITHUB_OUTPUT
+
+                  else
+                    # Default to using the git short hash
+                    echo "NAME=${{ steps.git-hash.outputs.SHORT_HASH }}" >> $GITHUB_OUTPUT
+                  fi
+
+            - uses: "google-github-actions/auth@v2"
+              if: ${{ !env.ACT }}
+              with:
+                  project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
+                  workload_identity_provider: ${{ env.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
+
+            - uses: "google-github-actions/auth@v2"
+              if: ${{ env.ACT }}
+              with:
+                  project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
+                  credentials_json: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS_JSON }}
+
+            - name: "Set up Cloud SDK"
+              uses: "google-github-actions/setup-gcloud@v2"
+              with:
+                  version: ">= 506.0.0"
+
+            - name: Delete any existing TEE instance
+              run: |
+                  gcloud compute instances delete tee-instance-${{ steps.git-hash.outputs.SHORT_HASH }} \
+                    --zone us-central1-a \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
+                    --quiet || true
+
+                  # Also delete any instances with the same ref tag
+                  gcloud compute instances list \
+                    --filter="tags.items=${{ steps.ref.outputs.NAME }}" \
+                    --format="value(name,zone)" \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }} | \
+                  while read instance zone; do
+                    echo "Deleting instance $instance in zone $zone"
+                    gcloud compute instances delete "$instance" \
+                      --zone "$zone" \
+                      --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
+                      --quiet || true
+                  done
+
+            - name: Create new TEE instance
+              id: instance
+              run: |
+                  DNS_NAME="${{ steps.ref.outputs.NAME }}.tee"
+                  FULL_DNS_NAME="${DNS_NAME}.${{ env.CLOUDFLARE_DOMAIN }}"
+
+                  INSTANCE=`gcloud compute instances create tee-instance-${{ steps.git-hash.outputs.SHORT_HASH }} \
+                    --machine-type c3-standard-4 \
+                    --zone us-central1-a \
+                    --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
+                    --metadata="git-branch=${{ github.ref_name }},git-hash=${{ github.sha }},domain=${FULL_DNS_NAME}" \
+                    --metadata-from-file startup-script=.github/workflows/tee/startup-script.sh \
+                    --scopes=https://www.googleapis.com/auth/cloud-platform \
+                    --tags=tee,${{ steps.ref.outputs.NAME }} \
+                    --confidential-compute-type=TDX \
+                    --shielded-secure-boot \
+                    --maintenance-policy=TERMINATE \
+                    --image-family=${{ env.VM_IMAGE_NAME }} \
+                    --image-project=${{ env.VM_IMAGE_PROJECT }} \
+                    --project ${{ env.GOOGLE_CLOUD_PROJECT }} \
+                    --format=json`
+
+                  echo $INSTANCE
+                  EXTERNAL_IP=$(echo $INSTANCE | jq -r '.[0].networkInterfaces[0].accessConfigs[0].natIP')
+                  echo "::notice ::TEE instance external IP: ${EXTERNAL_IP}"
+                  echo "::notice ::TEE instance: tee-instance-${{ steps.git-hash.outputs.SHORT_HASH }}"
+                  echo "EXTERNAL_IP=${EXTERNAL_IP}" >> $GITHUB_OUTPUT
+
+            - name: Create Cloudflare DNS record
+              run: |
+                  DNS_NAME="${{ steps.ref.outputs.NAME }}.tee"
+                  FULL_DNS_NAME="${DNS_NAME}.${{ env.CLOUDFLARE_DOMAIN }}"
+
+                  # First, check if record already exists by listing records with a filter
+                  EXISTING_RECORDS=$(curl -s --request GET \
+                    --url "https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records?type=A&name=${FULL_DNS_NAME}" \
+                    --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}")
+
+                  # Check if the request was successful
+                  if [ "$(echo $EXISTING_RECORDS | jq -r '.success')" != "true" ]; then
+                    echo $EXISTING_RECORDS
+                    echo "ERROR: Failed to check existing DNS records."
+                    exit 1
+                  fi
+
+                  RECORD_COUNT=$(echo $EXISTING_RECORDS | jq -r '.result | length')
+
+                  if [[ "$RECORD_COUNT" -gt 0 ]]; then
+                    # Record exists, get its ID and update it
+                    RECORD_ID=$(echo $EXISTING_RECORDS | jq -r '.result[0].id')
+                    echo "Updating existing DNS record ID ${RECORD_ID}"
+
+                    RESPONSE=$(curl -s --request PATCH \
+                      --url "https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records/${RECORD_ID}" \
+                      --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                      --header 'Content-Type: application/json' \
+                      --data "{
+                        \"content\": \"${{ steps.instance.outputs.EXTERNAL_IP }}\",
+                        \"comment\": \"Updated by GitHub Actions workflow - ${{ github.run_id }} - ${{ github.workflow }}\"
+                      }")
+                  else
+                    # Create new record
+                    RESPONSE=$(curl -s --request POST \
+                      --url "https://api.cloudflare.com/client/v4/zones/${{ env.CLOUDFLARE_DNS_ZONE_ID }}/dns_records" \
+                      --header "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                      --header 'Content-Type: application/json' \
+                      --data "{
+                        \"type\": \"A\",
+                        \"name\": \"${DNS_NAME}\",
+                        \"content\": \"${{ steps.instance.outputs.EXTERNAL_IP }}\",
+                        \"ttl\": 300,
+                        \"proxied\": false,
+                        \"comment\": \"Created by GitHub Actions workflow - ${{ github.run_id }} - ${{ github.workflow }}\"
+                      }")
+                  fi
+
+                  # Check for errors in the response
+                  if [ "$(echo $RESPONSE | jq -r '.success')" != "true" ]; then
+                    echo "Error: Cloudflare API call failed:"
+                    echo $RESPONSE | jq .
+                    exit 1
+                  else
+                    if [[ "$RECORD_COUNT" -gt 0 ]]; then
+                      echo "Updated existing record to point ${FULL_DNS_NAME} to ${{ steps.instance.outputs.EXTERNAL_IP }}"
+                    else
+                      echo "Created new record pointing ${FULL_DNS_NAME} to ${{ steps.instance.outputs.EXTERNAL_IP }}"
+                    fi
+                  fi
+
+                  echo "::notice ::TEE URL:: ${FULL_DNS_NAME}"
