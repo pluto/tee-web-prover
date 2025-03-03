@@ -8,9 +8,10 @@ export GIT_HASH=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/at
 export GIT_BRANCH=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attributes/git-branch" -H "Metadata-Flavor: Google")
 export DOMAIN=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attributes/domain" -H "Metadata-Flavor: Google")
 
-echo -n $GIT_HASH /etc/tee/git_hash
-echo -n $GIT_BRANCH /etc/tee/git_branch
-echo -n $DOMAIN /etc/tee/domain
+mkdir /etc/tee
+echo -n $GIT_HASH > /etc/tee/git_hash
+echo -n $GIT_BRANCH > /etc/tee/git_branch
+echo -n $DOMAIN > /etc/tee/domain
 
 # Install global dependencies
 apt update
