@@ -1,6 +1,8 @@
 #!/bin/bash
 set -ex
 
+export HOME=/root
+
 export PROJECT_NAME=$(curl -s "http://169.254.169.254/computeMetadata/v1/project/project-id" -H "Metadata-Flavor: Google")
 export GIT_HASH=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attributes/git-hash" -H "Metadata-Flavor: Google")
 export GIT_BRANCH=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attributes/git-branch" -H "Metadata-Flavor: Google")
