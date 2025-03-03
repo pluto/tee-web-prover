@@ -9,6 +9,9 @@ export GIT_BRANCH=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/
 export DOMAIN=$(curl -s "http://169.254.169.254/computeMetadata/v1/instance/attributes/domain" -H "Metadata-Flavor: Google")
 
 # Install global dependencies
+apt update
+apt install -y build-essential
+
 echo "Installing Rust"
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 
