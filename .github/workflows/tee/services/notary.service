@@ -1,0 +1,14 @@
+[Unit]
+Description=Notary Service
+After=network.target
+
+[Service]
+User=tee
+Group=tee
+WorkingDirectory=/opt/tee/tee-web-prover
+ExecStart=target/release/tee-web-prover
+Restart=always
+Environment="RUST_LOG=info"
+
+[Install]
+WantedBy=multi-user.target
