@@ -8,3 +8,15 @@ hyper = { version = "1", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
+config ="0.14.0"
+serde = {version = "1.0.218",features=["derive"] }
+serde_json = {version = "1.0.140" }
+clap = { version = "4.5.31", features=["derive"] }
+tokio-rustls = "0.26.2"
+rustls = "0.23.23"
+rustls-pemfile = "2.2.0"
+rustls-acme = {version = "0.13.0", features = ["tokio"] }
+tracing           ="0.1.40"
+tracing-subscriber={ version="0.3.18", features=["env-filter"] }
+thiserror = "2.0.12"
+futures-util="0.3.30"
