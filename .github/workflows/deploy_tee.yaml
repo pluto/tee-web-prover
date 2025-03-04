@@ -111,7 +111,7 @@ jobs:
 
                   # Also delete any instances with the same ref tag
                   gcloud compute instances list \
-                    --filter="tags.items=${{ steps.ref.outputs.NAME }}" \
+                    --filter="tags.items=git-${{ steps.ref.outputs.NAME }}" \
                     --format="value(name,zone)" \
                     --project ${{ env.GOOGLE_CLOUD_PROJECT }} | \
                   while read instance zone; do
@@ -135,7 +135,7 @@ jobs:
                     --metadata="git-branch=${{ github.ref_name }},git-hash=${{ github.sha }},domain=${FULL_DNS_NAME}" \
                     --metadata-from-file startup-script=.github/workflows/tee/startup-script.sh \
                     --scopes=https://www.googleapis.com/auth/cloud-platform \
-                    --tags=tee,${{ steps.ref.outputs.NAME }} \
+                    --tags=tee,git-${{ steps.ref.outputs.NAME }} \
                     --confidential-compute-type=TDX \
                     --shielded-secure-boot \
                     --maintenance-policy=TERMINATE \
